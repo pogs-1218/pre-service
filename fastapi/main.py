@@ -1,6 +1,58 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Path, Query, Body, Cookie, Header, Response
+from fastapi.responses import JSONResponse, RedirectResponse
+from pydantic import BaseModel, Field, FilePath
 from enum import Enum
-from typing import Union
+from typing import Union, Annotated, Any
+
+class BaseUser(BaseModel):
+  usernanme: str
+  email: str
+  full_name: str | None = None
+
+class UserIn(BaseUser):
+  password: str
+
+class UserIn(BaseModel):
+  username: str
+  password: str
+  email: str
+  full_name: str | None = None
+
+class UserOut(BaseModel):
+  username: str
+  email: str
+  full_name: str | None = None
+
+
+class Image(BaseModel):
+  url: FilePath 
+  name: str
+
+class Item(BaseModel):
+  name: str = Field(
+    examples=['Foo']
+  )
+  description: str | None = Field(
+    default=None, title='The description of the item', max_length=300
+  )
+  price: float = Field(
+    gt=0, description='The price must be greater then zero', examples=[35.4]
+  )
+  tax: float | None = Field(
+    default=None, examples=[3.2]
+  )
+  tags: list[str] = []
+  images: list[Image] | None = None
+
+class Offer(BaseModel):
+  name: str
+  description: str | None = None
+  price: float
+  items: list[Item]
+
+class User(BaseModel):
+  username: str
+  full_name: str | None = None
 
 class ModelName(str, Enum):
   alexnet = 'alexnet'
@@ -14,17 +66,83 @@ fake_items_db = [
   {'item_name':'Bax'}
 ]
 
+@app.get('/portal', response_model=None)
+async def get_portal(teleport: bool = False) -> Response | dict:
+  if teleport:
+    return RedirectResponse(url='https://www.google.com')
+  return {'message':'json message'}
+
+@app.post('/user/')
+async def create_user(user: UserIn)->BaseUser:
+  return user
+
+@app.post('/offers/')
+async def create_offer(offer: Offer):
+  return offer
+
+@app.post('/images/multiple/')
+async def create_multiple_images(images: list[Image]):
+  return images
+
+@app.post('/index-weights/')
+async def create_index_weights(weights: dict[int, float]):
+  return weights
+
 @app.get('/')
 async def root():
   return {'message': 'Hello World'}
 
-@app.get('/items/')
-async def read_item_q(skip: int = 0, limit: int = 10):
-  return fake_items_db[skip:skip+limit]
+@app.get('/items/', response_model=list[Item])
+async def read_items(
+  q: Annotated[str | None, Query(title='Query String', description='Query string for the items to search in the database', min_length=3, max_length=5, deprecated=True,) ],
+  user_agent: Annotated[str | None, Header()]= None,
+  ads_id: Annotated[str | None, Cookie()] = None
+) -> Any:
+  results = {'items': 
+             [
+             {'item_id': 'foo'},
+             {'item_id': 'bar'}
+             ]}
+  if q:
+    results.update({'q': q})
+  return results
 
 @app.get('/items/{item_id}')
-async def read_item(item_id: int, q: Union[str, None] = None):
+async def read_item(
+  item_id: Annotated[int, Path(title = 'The ID of the item to get', gt=0, le=100)],
+  size: Annotated[float, Query(ge=0, lt=10.5)],
+  q: Annotated[str | None, Query(alias='item-query')] = None,
+):
   return {'item_id':item_id, 'q': q}
+
+@app.post('/items/{item_id}')
+async def create_item(
+  item_id: int, 
+  item: Item, 
+  q: str | None = None
+) -> Item:
+  item_dict = item.dict()
+  if item.tax:
+    price_with_tax = item.price + item.tax
+    item_dict.update({'price_with_tax': price_with_tax})
+  if q:
+    item_dict.update({'q': q})
+  return {'item_id': item_id, **item_dict}
+
+@app.put('/items/{item_id}')
+async def update_item(
+  item_id: Annotated[int, Path()],
+  user: Annotated[User, Body(title="user info")],
+  importance: Annotated[int, Body()],
+  q: str | None = None,
+  item: Item | None = None
+):
+  results = {'item_id': item_id, 'user':user, 'importance':importance}
+  if q:
+    results.update({'q': q})
+  if item:
+    results.update({'item': item})
+  return results
 
 @app.get('/users/{user_id}/items/{item_id}')
 async def read_user_item(user_id: int, item_id: int, q: Union[str, None] = None, short: bool = False):
@@ -49,7 +167,7 @@ async def read_user(user_id: str):
 async def get_model(model_name: ModelName):
   if model_name == ModelName.alexnet:
     return {'model_name':model_name, 'message':'Deep Learning FTW'}
-  if model_name.value is 'lenet':
+  if model_name.value == 'lenet':
     return {'model_name':model_name, 'message':'LeCNN all the images'}
   return {'model_name':model_name, 'message':'Have some residuals'}
 
