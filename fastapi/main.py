@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Path, Query, Body, Cookie, Header, Response
+from fastapi import FastAPI, Path, Query, Body, Cookie, Header, Response, status, Form, File, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field, FilePath
 from enum import Enum
@@ -12,17 +12,11 @@ class BaseUser(BaseModel):
 class UserIn(BaseUser):
   password: str
 
-class UserIn(BaseModel):
-  username: str
-  password: str
-  email: str
-  full_name: str | None = None
+class UserInDB(BaseUser):
+  hashed_password: str
 
-class UserOut(BaseModel):
-  username: str
-  email: str
-  full_name: str | None = None
-
+class UserOut(BaseUser):
+  pass
 
 class Image(BaseModel):
   url: FilePath 
@@ -66,17 +60,50 @@ fake_items_db = [
   {'item_name':'Bax'}
 ]
 
+def fake_password_hasher(raw_password: str):
+  return 'supersecret' + raw_password
+
+def fake_save_user(user_in: UserIn):
+  hashed_password = fake_password_hasher(user_in.password)
+  user_in_db = UserInDB(**user_in.dict(), hashed_password=hashed_password)
+  return user_in_db
+
+@app.post('/file/')
+async def create_file(file: Annotated[bytes, File()]):
+  return {'file_size': len(file)}
+
+@app.post('/files/')
+async def create_files(files: Annotated[list[UploadFile], File(description='files')]):
+  return {'filename': [file.filename for file in files]}
+
+@app.post('/uploadfile/')
+async def create_upload_file(file: Annotated[UploadFile | None, File(description='A file read as UploadFile')]):
+  if not file:
+    return {'filename':'no file'}
+  contents = await file.read()
+  return {'filename': file.filename}
+
+@app.post('/login/')
+async def login(username: Annotated[str, Form()],
+                password: Annotated[str, Form()]):
+  return {'username':username}
+
 @app.get('/portal', response_model=None)
 async def get_portal(teleport: bool = False) -> Response | dict:
   if teleport:
     return RedirectResponse(url='https://www.google.com')
   return {'message':'json message'}
 
-@app.post('/user/')
-async def create_user(user: UserIn)->BaseUser:
+@app.post('/user/', status_code=201, response_model=UserOut)
+async def create_user(user_in: UserIn):
+  user_saved = fake_save_user(user_in)
+  return user_saved
+
+@app.post('/user2/')
+async def create_user2(user: UserIn) -> UserOut:
   return user
 
-@app.post('/offers/')
+@app.post('/offers/', status_code=status.HTTP_201_CREATED)
 async def create_offer(offer: Offer):
   return offer
 
