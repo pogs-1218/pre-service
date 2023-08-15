@@ -1,5 +1,6 @@
-from fastapi import FastAPI, Path, Query, Body, Cookie, Header, Response, status, Form, File, UploadFile
+from fastapi import FastAPI, Path, Query, Body, Cookie, Header, Response, status, Form, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, FilePath
 from enum import Enum
 from typing import Union, Annotated, Any
@@ -53,11 +54,15 @@ class ModelName(str, Enum):
   resnet = 'resnet'
   lenet = 'lenet'
 
+class Tags(Enum):
+  items = 'items'
+  users = 'users'
+
 app = FastAPI()
 fake_items_db = [
-  {'item_name':'Foo'},
-  {'item_name':'Bar'},
-  {'item_name':'Bax'}
+  {'item_id':'Foo'},
+  {'item_id':'Bar'},
+  {'item_id':'Bax'}
 ]
 
 def fake_password_hasher(raw_password: str):
@@ -69,15 +74,25 @@ def fake_save_user(user_in: UserIn):
   return user_in_db
 
 @app.post('/file/')
-async def create_file(file: Annotated[bytes, File()]):
-  return {'file_size': len(file)}
+async def create_file(file: Annotated[bytes, File()],
+                      fileb: Annotated[UploadFile, File()],
+                      token: Annotated[str, Form()]):
+  return {
+    'file_size': len(file),
+    'token': token,
+    'fileb_content_type': fileb.content_type
+    }
 
-@app.post('/files/')
+@app.post('/files/', deprecated=True)
 async def create_files(files: Annotated[list[UploadFile], File(description='files')]):
   return {'filename': [file.filename for file in files]}
 
-@app.post('/uploadfile/')
+@app.post('/uploadfile/', summary="aaaa")
 async def create_upload_file(file: Annotated[UploadFile | None, File(description='A file read as UploadFile')]):
+  """
+  Upload a file by UploadFile method.
+  - **file**: file contents
+  """
   if not file:
     return {'filename':'no file'}
   contents = await file.read()
@@ -85,7 +100,8 @@ async def create_upload_file(file: Annotated[UploadFile | None, File(description
 
 @app.post('/login/')
 async def login(username: Annotated[str, Form()],
-                password: Annotated[str, Form()]):
+                password: Annotated[str, Form()], 
+                tags=[Tags.users]):
   return {'username':username}
 
 @app.get('/portal', response_model=None)
@@ -94,13 +110,13 @@ async def get_portal(teleport: bool = False) -> Response | dict:
     return RedirectResponse(url='https://www.google.com')
   return {'message':'json message'}
 
-@app.post('/user/', status_code=201, response_model=UserOut)
+@app.post('/user/', status_code=201, response_model=UserOut, tags=['users', 'items'])
 async def create_user(user_in: UserIn):
   user_saved = fake_save_user(user_in)
   return user_saved
 
 @app.post('/user2/')
-async def create_user2(user: UserIn) -> UserOut:
+async def create_user2(user: UserIn, tags=['users']) -> UserOut:
   return user
 
 @app.post('/offers/', status_code=status.HTTP_201_CREATED)
@@ -119,7 +135,7 @@ async def create_index_weights(weights: dict[int, float]):
 async def root():
   return {'message': 'Hello World'}
 
-@app.get('/items/', response_model=list[Item])
+@app.get('/items/', response_model=list[Item], tags=['items'])
 async def read_items(
   q: Annotated[str | None, Query(title='Query String', description='Query string for the items to search in the database', min_length=3, max_length=5, deprecated=True,) ],
   user_agent: Annotated[str | None, Header()]= None,
@@ -134,12 +150,19 @@ async def read_items(
     results.update({'q': q})
   return results
 
+items = {'foo':'foo item'}
+
 @app.get('/items/{item_id}')
 async def read_item(
-  item_id: Annotated[int, Path(title = 'The ID of the item to get', gt=0, le=100)],
+  item_id: Annotated[str, Path(title = 'The ID of the item to get')],
   size: Annotated[float, Query(ge=0, lt=10.5)],
   q: Annotated[str | None, Query(alias='item-query')] = None,
 ):
+  if item_id not in items:
+    raise HTTPException(status_code=404, 
+                        detail='Item not fount',
+                        headers={'X-Error':'There goes my error'},
+                        )
   return {'item_id':item_id, 'q': q}
 
 @app.post('/items/{item_id}')
@@ -157,13 +180,13 @@ async def create_item(
   return {'item_id': item_id, **item_dict}
 
 @app.put('/items/{item_id}')
-async def update_item(
-  item_id: Annotated[int, Path()],
-  user: Annotated[User, Body(title="user info")],
-  importance: Annotated[int, Body()],
-  q: str | None = None,
-  item: Item | None = None
-):
+async def update_item(item_id: Annotated[int, Path()],
+                      user: Annotated[User, Body(title="user info")],
+                      importance: Annotated[int, Body()],
+                      q: str | None = None,
+                      item: Item | None = None
+                      ):
+  json_compatible_item_data = jsonable_encoder(item)
   results = {'item_id': item_id, 'user':user, 'importance':importance}
   if q:
     results.update({'q': q})
